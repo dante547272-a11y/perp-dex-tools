@@ -506,6 +506,8 @@ class TradingBot:
 
             # Main trading loop
             while not self.shutdown_requested:
+                # Hourly reset: cancel all orders and try to close all positions
+                await self._hourly_reset_if_due()
                 # Update active orders
                 active_orders = await self.exchange_client.get_active_orders(self.config.contract_id)
 
