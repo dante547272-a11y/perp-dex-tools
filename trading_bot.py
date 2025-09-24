@@ -79,6 +79,8 @@ class TradingBot:
         self.order_canceled_event = asyncio.Event()
         self.shutdown_requested = False
         self.loop = None
+        self.last_reset_time = time.time()
+        self.reset_interval_seconds = 60 * 60
 
         # Register order callback
         self._setup_websocket_handlers()
@@ -351,6 +353,69 @@ class TradingBot:
                 self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
 
             print("--------------------------------")
+
+    async def _cancel_all_orders(self):
+        """Cancel all active orders for the configured contract."""
+        try:
+            active_orders = await self.exchange_client.get_active_orders(self.config.contract_id)
+            for order in active_orders:
+                try:
+                    await self.exchange_client.cancel_order(order.order_id)
+                except Exception as e:
+                    self.logger.log(f"Failed to cancel order {order.order_id}: {e}", "WARNING")
+            # brief pause to allow cancellations to propagate
+            await asyncio.sleep(1)
+        except Exception as e:
+            self.logger.log(f"Error fetching active orders for cancellation: {e}", "ERROR")
+
+    async def _close_all_positions(self):
+        """Place a reduce-only style close order for the full current position size."""
+        try:
+            position_amt = await self.exchange_client.get_account_positions()
+            if position_amt and position_amt > 0:
+                try:
+                    best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
+                except Exception:
+                    best_bid, best_ask = 0, 0
+
+                close_side = self.config.close_order_side
+                # Fallback price if BBO unavailable
+                price = None
+                if close_side == 'sell':
+                    price = (best_bid + self.config.tick_size) if best_bid else self.config.tick_size
+                else:
+                    price = (best_ask - self.config.tick_size) if best_ask else self.config.tick_size
+
+                close_res = await self.exchange_client.place_close_order(
+                    self.config.contract_id,
+                    position_amt,
+                    price,
+                    close_side
+                )
+                if not close_res.success:
+                    self.logger.log(f"Hourly reset close-all failed: {close_res.error_message}", "ERROR")
+                else:
+                    self.logger.log(f"Hourly reset placed close-all order {close_res.order_id} for {position_amt}")
+        except Exception as e:
+            self.logger.log(f"Error closing all positions: {e}", "ERROR")
+
+    async def _hourly_reset_if_due(self):
+        """Every hour: cancel all orders and attempt to close all positions, then reset state."""
+        now = time.time()
+        if now - self.last_reset_time < self.reset_interval_seconds:
+            return
+        self.last_reset_time = now
+
+        self.logger.log("Hourly reset triggered: cancelling all orders and closing all positions", "INFO")
+        try:
+            await self._cancel_all_orders()
+            await self._close_all_positions()
+            # Reset local counters/state so the bot can start fresh
+            self.active_close_orders = []
+            self.last_close_orders = 0
+            self.last_open_order_time = time.time()
+        except Exception as e:
+            self.logger.log(f"Error during hourly reset: {e}", "ERROR")
 
     async def _meet_grid_step_condition(self) -> bool:
         if self.active_close_orders:
