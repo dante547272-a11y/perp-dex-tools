@@ -331,16 +331,13 @@ class TradingBot:
                     error_message = f"\n\nERROR: [{self.config.exchange.upper()}_{self.config.ticker.upper()}] "
                     error_message += "Position mismatch detected\n"
                     error_message += "###### ERROR ###### ERROR ###### ERROR ###### ERROR #####\n"
-                    error_message += "Please manually rebalance your position and take-profit orders\n"
-                    error_message += "请手动平衡当前仓位和正在关闭的仓位\n"
+                    error_message += "Detected mismatch; auto-resetting: cancel all orders and close all positions\n"
+                    error_message += "检测到仓位与平仓订单不一致；系统已自动取消全部订单并尝试全部平仓\n"
                     error_message += f"current position: {position_amt} | active closing amount: {active_close_amount} | "f"Order quantity: {len(self.active_close_orders)}\n"
                     error_message += "###### ERROR ###### ERROR ###### ERROR ###### ERROR #####\n"
                     self.logger.log(error_message, "ERROR")
 
                     await self._lark_bot_notify(error_message.lstrip())
-
-                    if not self.shutdown_requested:
-                        self.shutdown_requested = True
 
                     mismatch_detected = True
                 else:
@@ -523,6 +520,19 @@ class TradingBot:
 
                 # Periodic logging
                 mismatch_detected = await self._log_status_periodically()
+
+                # If mismatch detected, auto-reset and continue without stopping the bot
+                if mismatch_detected:
+                    try:
+                        await self._cancel_all_orders()
+                        await self._close_all_positions()
+                        self.active_close_orders = []
+                        self.last_close_orders = 0
+                        self.last_open_order_time = time.time()
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        self.logger.log(f"Error handling mismatch auto-reset: {e}", "ERROR")
+                    continue
 
                 stop_trading, pause_trading = await self._check_price_condition()
                 if stop_trading:
