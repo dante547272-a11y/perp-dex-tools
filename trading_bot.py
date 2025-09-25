@@ -86,17 +86,20 @@ class TradingBot:
         self._setup_websocket_handlers()
 
     async def graceful_shutdown(self, reason: str = "Unknown"):
-        """Perform graceful shutdown of the trading bot."""
-        self.logger.log(f"Starting graceful shutdown: {reason}", "INFO")
-        self.shutdown_requested = True
+        """Repurposed: perform an in-place reset (cancel all, close all) and continue running."""
+        self.logger.log(f"Initiating reset (was graceful_shutdown): {reason}", "INFO")
 
         try:
-            # Disconnect from exchange
-            await self.exchange_client.disconnect()
-            self.logger.log("Graceful shutdown completed", "INFO")
+            await self._cancel_all_orders()
+            await self._close_all_positions()
+            # Reset local counters/state so the bot can start fresh without stopping
+            self.active_close_orders = []
+            self.last_close_orders = 0
+            self.last_open_order_time = time.time()
+            self.logger.log("Reset completed; continuing execution", "INFO")
 
         except Exception as e:
-            self.logger.log(f"Error during graceful shutdown: {e}", "ERROR")
+            self.logger.log(f"Error during reset: {e}", "ERROR")
 
     def _setup_websocket_handlers(self):
         """Setup WebSocket handlers for order updates."""
