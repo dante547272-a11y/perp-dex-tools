@@ -38,7 +38,7 @@ class TradingConfig:
     grid_upper_count: int = 10  # Number of grids above current price
     grid_lower_count: int = 10  # Number of grids below current price
     grid_price_range: Decimal = Decimal('10.0')  # Price range percentage (e.g., ±10%)
-    grid_initial_balance: Decimal = Decimal('1000.0')  # Initial balance for grid strategy
+    grid_initial_balance: Decimal = Decimal('10000.0')  # Initial balance for grid strategy
     grid_per_order_amount: Decimal = Decimal('50.0')  # Amount per grid order
     # Dynamic grid movement parameters
     grid_dynamic_mode: bool = True  # Enable dynamic grid movement
