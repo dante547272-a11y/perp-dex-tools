@@ -37,6 +37,12 @@ python grid_bot.py --exchange edgex --ticker ETH --grid-spacing 0.5 --grid-upper
 
 # Backpack交易所BTC网格策略
 python grid_bot.py --exchange backpack --ticker BTC --grid-spacing 1.0 --grid-upper 12 --grid-lower 12 --per-order 80
+
+# 🆕 动态网格移动（趋势市场推荐）
+python grid_bot.py --exchange grvt --ticker HYPE --grid-spacing 2.0 --grid-upper 10 --grid-lower 10 --per-order 70
+
+# 🆕 固定网格（震荡市场推荐）  
+python grid_bot.py --exchange grvt --ticker ETH --grid-spacing 1.0 --grid-upper 15 --grid-lower 15 --per-order 50 --disable-dynamic
 ```
 
 ## 📋 新增文件说明
@@ -48,6 +54,7 @@ python grid_bot.py --exchange backpack --ticker BTC --grid-spacing 1.0 --grid-up
 | `grid_utils.py` | 参数验证、分析和测试工具 |
 | `test_grid_strategy.py` | 组件测试验证脚本 |
 | `docs/GRID_STRATEGY.md` | 详细使用文档 |
+| `DYNAMIC_GRID_GUIDE.md` | 🆕 动态网格移动功能指南 |
 
 ## ⚙️ 核心参数
 

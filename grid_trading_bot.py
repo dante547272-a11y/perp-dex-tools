@@ -38,6 +38,11 @@ class GridTradingBot(TradingBot):
         self.total_profit: Decimal = Decimal('0')
         self.grid_trades_count: int = 0
         
+        # 动态移动网格相关
+        self.grid_moves_count: int = 0  # 网格移动次数
+        self.last_price_check: Optional[Decimal] = None
+        self.price_breakthrough_threshold: Decimal = config.grid_breakthrough_threshold  # 突破阈值
+        
         # 验证网格配置
         self._validate_grid_config()
         
@@ -204,6 +209,22 @@ class GridTradingBot(TradingBot):
             # 小延迟避免订单频率限制
             await asyncio.sleep(0.1)
         
+        # 计算并记录网格范围信息
+        if self.grid_levels:
+            buy_levels = [level for level in self.grid_levels if level.side == 'buy']
+            sell_levels = [level for level in self.grid_levels if level.side == 'sell']
+            
+            min_price = min([level.price for level in buy_levels]) if buy_levels else self.center_price
+            max_price = max([level.price for level in sell_levels]) if sell_levels else self.center_price
+            
+            price_range_percent = ((max_price - min_price) / self.center_price) * 100
+            
+            self.logger.log(
+                f"Grid Range - Center: {self.center_price:.4f}, "
+                f"Range: {min_price:.4f} - {max_price:.4f} ({price_range_percent:.1f}%)",
+                "INFO"
+            )
+        
         self.logger.log(
             f"Grid initialization completed: {success_count}/{len(self.grid_levels)} orders placed successfully",
             "INFO"
@@ -283,6 +304,149 @@ class GridTradingBot(TradingBot):
         except Exception as e:
             self.logger.log(f"Error refilling grid level: {e}", "ERROR")
     
+    async def _check_price_breakthrough(self) -> bool:
+        """检测价格是否突破网格边界"""
+        try:
+            # 如果未启用动态模式，直接返回
+            if not self.config.grid_dynamic_mode:
+                return False
+                
+            if not self.center_price or not self.grid_levels:
+                return False
+            
+            # 获取当前价格
+            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
+            if best_bid <= 0 or best_ask <= 0 or best_bid >= best_ask:
+                return False
+            
+            current_price = (best_bid + best_ask) / 2
+            self.last_price_check = current_price
+            
+            # 计算网格边界
+            spacing_decimal = self.config.grid_spacing / 100
+            upper_boundary = self.center_price * (1 + spacing_decimal * self.config.grid_upper_count)
+            lower_boundary = self.center_price * (1 - spacing_decimal * self.config.grid_lower_count)
+            
+            # 计算突破阈值（网格间距的一半）
+            breakthrough_threshold = self.center_price * (spacing_decimal * self.price_breakthrough_threshold)
+            
+            # 检测上边界突破
+            if current_price > upper_boundary + breakthrough_threshold:
+                self.logger.log(
+                    f"Price breakthrough detected: UP - Current: {current_price:.4f}, "
+                    f"Upper boundary: {upper_boundary:.4f}",
+                    "INFO"
+                )
+                await self._move_grid_up(current_price)
+                return True
+            
+            # 检测下边界突破
+            if current_price < lower_boundary - breakthrough_threshold:
+                self.logger.log(
+                    f"Price breakthrough detected: DOWN - Current: {current_price:.4f}, "
+                    f"Lower boundary: {lower_boundary:.4f}",
+                    "INFO"
+                )
+                await self._move_grid_down(current_price)
+                return True
+            
+            return False
+            
+        except Exception as e:
+            self.logger.log(f"Error checking price breakthrough: {e}", "ERROR")
+            return False
+    
+    async def _move_grid_up(self, current_price: Decimal):
+        """向上移动网格"""
+        try:
+            self.logger.log("Moving grid UP...", "INFO")
+            
+            # 计算新的中心价格（向上移动一个网格间距）
+            spacing_decimal = self.config.grid_spacing / 100
+            new_center_price = self.center_price * (1 + spacing_decimal)
+            
+            await self._execute_grid_move(new_center_price, "UP")
+            
+        except Exception as e:
+            self.logger.log(f"Error moving grid up: {e}", "ERROR")
+    
+    async def _move_grid_down(self, current_price: Decimal):
+        """向下移动网格"""
+        try:
+            self.logger.log("Moving grid DOWN...", "INFO")
+            
+            # 计算新的中心价格（向下移动一个网格间距）
+            spacing_decimal = self.config.grid_spacing / 100
+            new_center_price = self.center_price * (1 - spacing_decimal)
+            
+            await self._execute_grid_move(new_center_price, "DOWN")
+            
+        except Exception as e:
+            self.logger.log(f"Error moving grid down: {e}", "ERROR")
+    
+    async def _execute_grid_move(self, new_center_price: Decimal, direction: str):
+        """执行网格移动"""
+        try:
+            old_center_price = self.center_price
+            
+            # 1. 取消所有现有网格订单
+            self.logger.log("Cancelling all existing grid orders...", "INFO")
+            cancelled_count = await self._cancel_all_grid_orders()
+            
+            # 2. 更新中心价格
+            self.center_price = self.exchange_client.round_to_tick(new_center_price)
+            
+            # 3. 重新计算网格级别
+            self.grid_levels = self._calculate_grid_levels()
+            
+            # 4. 重新下单到所有网格级别
+            self.logger.log("Placing orders to new grid levels...", "INFO")
+            success_count = 0
+            for grid_level in self.grid_levels:
+                success = await self._place_grid_order(grid_level)
+                if success:
+                    success_count += 1
+                await asyncio.sleep(0.1)  # 避免订单频率限制
+            
+            # 5. 记录移动结果
+            self.grid_moves_count += 1
+            
+            self.logger.log(
+                f"Grid moved {direction}: {old_center_price:.4f} -> {self.center_price:.4f} "
+                f"| Cancelled: {cancelled_count} | Placed: {success_count}/{len(self.grid_levels)} "
+                f"| Total moves: {self.grid_moves_count}",
+                "INFO"
+            )
+            
+        except Exception as e:
+            self.logger.log(f"Error executing grid move: {e}", "ERROR")
+    
+    async def _cancel_all_grid_orders(self) -> int:
+        """取消所有网格订单"""
+        cancelled_count = 0
+        
+        try:
+            for order_id in list(self.active_grid_orders.keys()):
+                try:
+                    cancel_result = await self.exchange_client.cancel_order(order_id)
+                    if cancel_result.success:
+                        cancelled_count += 1
+                    
+                    # 从活跃订单中移除
+                    if order_id in self.active_grid_orders:
+                        del self.active_grid_orders[order_id]
+                    
+                    await asyncio.sleep(0.05)  # 避免频率限制
+                    
+                except Exception as e:
+                    self.logger.log(f"Error cancelling order {order_id}: {e}", "WARNING")
+            
+            return cancelled_count
+            
+        except Exception as e:
+            self.logger.log(f"Error cancelling grid orders: {e}", "ERROR")
+            return cancelled_count
+    
     def _setup_grid_websocket_handlers(self):
         """设置网格策略的WebSocket处理程序"""
         def grid_order_update_handler(message):
@@ -330,11 +494,17 @@ class GridTradingBot(TradingBot):
             buy_orders = sum(1 for order in active_orders if order.side == 'buy')
             sell_orders = sum(1 for order in active_orders if order.side == 'sell')
             
+            # 显示当前价格
+            current_price_info = ""
+            if self.last_price_check:
+                current_price_info = f"Current Price: {self.last_price_check:.4f} | "
+            
             self.logger.log(
-                f"Grid Status - Active Orders: {len(active_orders)} "
+                f"Grid Status - {current_price_info}Active Orders: {len(active_orders)} "
                 f"(Buy: {buy_orders}, Sell: {sell_orders}) | "
                 f"Total Profit: {self.total_profit:.4f} USDT | "
-                f"Grid Trades: {self.grid_trades_count}",
+                f"Grid Trades: {self.grid_trades_count} | "
+                f"Grid Moves: {self.grid_moves_count}",
                 "INFO"
             )
             
@@ -382,6 +552,9 @@ class GridTradingBot(TradingBot):
             self.logger.log(f"Upper Grids: {self.config.grid_upper_count}", "INFO")
             self.logger.log(f"Lower Grids: {self.config.grid_lower_count}", "INFO")
             self.logger.log(f"Per Order Amount: {self.config.grid_per_order_amount} USDT", "INFO")
+            self.logger.log(f"Dynamic Mode: {self.config.grid_dynamic_mode}", "INFO")
+            if self.config.grid_dynamic_mode:
+                self.logger.log(f"Breakthrough Threshold: {self.config.grid_breakthrough_threshold}x grid spacing", "INFO")
             self.logger.log("==================================", "INFO")
             
             # 设置事件循环
@@ -411,6 +584,18 @@ class GridTradingBot(TradingBot):
                 if current_time - last_monitor_time > 60:
                     await self._grid_status_monitor()
                     last_monitor_time = current_time
+                
+                # 检查价格突破（每10秒检测一次）
+                if not hasattr(self, '_last_breakthrough_check'):
+                    self._last_breakthrough_check = 0
+                
+                if current_time - self._last_breakthrough_check > 10:
+                    breakthrough_detected = await self._check_price_breakthrough()
+                    self._last_breakthrough_check = current_time
+                    
+                    # 如果发生网格移动，稍等片刻让订单稳定
+                    if breakthrough_detected:
+                        await asyncio.sleep(5)
                 
                 # 检查价格停止/暂停条件
                 stop_trading, pause_trading = await self._check_price_condition()
@@ -444,8 +629,11 @@ class GridTradingBot(TradingBot):
     async def graceful_shutdown(self, reason: str = "Unknown"):
         """优雅关闭网格策略"""
         self.logger.log(f"Grid strategy shutdown: {reason}", "INFO")
-        self.logger.log(f"Final Statistics - Total Profit: {self.total_profit:.4f} USDT, "
-                       f"Grid Trades: {self.grid_trades_count}", "INFO")
+        self.logger.log(
+            f"Final Statistics - Total Profit: {self.total_profit:.4f} USDT, "
+            f"Grid Trades: {self.grid_trades_count}, Grid Moves: {self.grid_moves_count}",
+            "INFO"
+        )
         
         # 可选：取消所有活跃的网格订单
         # 注释掉以保持订单继续工作

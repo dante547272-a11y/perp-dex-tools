@@ -40,6 +40,9 @@ class TradingConfig:
     grid_price_range: Decimal = Decimal('10.0')  # Price range percentage (e.g., ±10%)
     grid_initial_balance: Decimal = Decimal('1000.0')  # Initial balance for grid strategy
     grid_per_order_amount: Decimal = Decimal('50.0')  # Amount per grid order
+    # Dynamic grid movement parameters
+    grid_dynamic_mode: bool = True  # Enable dynamic grid movement
+    grid_breakthrough_threshold: Decimal = Decimal('0.5')  # Breakthrough threshold as percentage of grid spacing
 
     @property
     def close_order_side(self) -> str:

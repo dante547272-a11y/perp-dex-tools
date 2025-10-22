@@ -69,6 +69,12 @@ def parse_arguments():
     parser.add_argument('--max-orders', type=int, default=100,
                         help='最大同时活跃订单数 (默认: 100)')
     
+    # 动态网格参数
+    parser.add_argument('--disable-dynamic', action='store_true',
+                        help='禁用动态网格移动功能')
+    parser.add_argument('--breakthrough-threshold', type=float, default=0.5,
+                        help='价格突破阈值（网格间距的百分比，默认0.5）')
+    
     # 测试和演示功能
     parser.add_argument('--test-mode', action='store_true',
                         help='运行策略模拟测试，不执行真实交易')
@@ -191,6 +197,9 @@ async def main():
         grid_lower_count=args.grid_lower,
         grid_initial_balance=Decimal(str(args.initial_balance)),
         grid_per_order_amount=Decimal(str(args.per_order)),
+        # 动态网格参数
+        grid_dynamic_mode=not args.disable_dynamic,
+        grid_breakthrough_threshold=Decimal(str(args.breakthrough_threshold)),
     )
 
     # 打印策略配置摘要
@@ -205,6 +214,9 @@ async def main():
     print(f"每单金额: {config.grid_per_order_amount} USDT")
     print(f"总网格数: {config.grid_upper_count + config.grid_lower_count} 个")
     print(f"预计占用资金: {(config.grid_upper_count + config.grid_lower_count) * config.grid_per_order_amount} USDT")
+    print(f"动态移动: {'启用' if config.grid_dynamic_mode else '禁用'}")
+    if config.grid_dynamic_mode:
+        print(f"突破阈值: {config.grid_breakthrough_threshold}x网格间距")
     print("=" * 60)
     
     # 确认启动
