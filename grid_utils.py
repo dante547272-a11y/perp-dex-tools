@@ -33,8 +33,8 @@ class GridStrategyValidator:
         # 网格数量验证
         if grid_upper <= 0 or grid_lower <= 0:
             errors.append("网格数量必须大于0")
-        elif grid_upper > 50 or grid_lower > 50:
-            errors.append("单侧网格数量建议不超过50个，过多可能导致资金利用率低")
+        elif grid_upper > 200 or grid_lower > 200:
+            errors.append("单侧网格数量建议不超过200个，过多可能导致资金利用率低")
         
         # 订单金额验证
         if per_order <= 0:
@@ -322,7 +322,7 @@ if __name__ == "__main__":
         """测试网格工具功能"""
         # 参数验证测试
         validator = GridStrategyValidator()
-        errors = validator.validate_basic_params(1.0, 10, 10, 50.0, 1000.0)
+        errors = validator.validate_basic_params(1.0, 10, 10, 50.0, 6000.0)
         if errors:
             print("参数验证错误:")
             for error in errors:
