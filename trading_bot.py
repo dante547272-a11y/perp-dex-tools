@@ -32,6 +32,14 @@ class TradingConfig:
     stop_price: Decimal
     pause_price: Decimal
     boost_mode: bool
+    # Grid strategy parameters
+    grid_mode: bool = False
+    grid_spacing: Decimal = Decimal('1.0')  # Grid spacing percentage (e.g., 1.0%)
+    grid_upper_count: int = 10  # Number of grids above current price
+    grid_lower_count: int = 10  # Number of grids below current price
+    grid_price_range: Decimal = Decimal('10.0')  # Price range percentage (e.g., ±10%)
+    grid_initial_balance: Decimal = Decimal('1000.0')  # Initial balance for grid strategy
+    grid_per_order_amount: Decimal = Decimal('50.0')  # Amount per grid order
 
     @property
     def close_order_side(self) -> str:
