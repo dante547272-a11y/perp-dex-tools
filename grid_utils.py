@@ -55,7 +55,7 @@ class GridStrategyValidator:
                 f"所需资金不足: 需要 {total_required:.2f} USDT，"
                 f"但初始资金只有 {initial_balance:.2f} USDT"
             )
-        elif total_required < initial_balance * 0.5:
+        elif total_required < initial_balance * 0.1:
             errors.append(
                 f"资金利用率较低: 仅使用 {total_required/initial_balance*100:.1f}% 的资金，"
                 "建议增加网格数量或每单金额"
