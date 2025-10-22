@@ -74,7 +74,7 @@ class GridTradingBot(TradingBot):
         # 创建买入网格（价格低于中心价格）
         for i in range(1, self.config.grid_lower_count + 1):
             price = self.center_price * (1 - spacing_decimal * i)
-            price = self.round_to_tick(price)
+            price = self.exchange_client.round_to_tick(price)
             
             # 计算代币数量：USDT金额 / 价格
             token_quantity = self.config.grid_per_order_amount / price
@@ -91,7 +91,7 @@ class GridTradingBot(TradingBot):
         # 创建卖出网格（价格高于中心价格）
         for i in range(1, self.config.grid_upper_count + 1):
             price = self.center_price * (1 + spacing_decimal * i)
-            price = self.round_to_tick(price)
+            price = self.exchange_client.round_to_tick(price)
             
             # 计算代币数量：USDT金额 / 价格
             token_quantity = self.config.grid_per_order_amount / price
@@ -116,7 +116,7 @@ class GridTradingBot(TradingBot):
             
             # 使用中间价作为中心价格
             self.center_price = (best_bid + best_ask) / 2
-            self.center_price = self.round_to_tick(self.center_price)
+            self.center_price = self.exchange_client.round_to_tick(self.center_price)
             
             self.logger.log(f"Center price initialized: {self.center_price}", "INFO")
             
