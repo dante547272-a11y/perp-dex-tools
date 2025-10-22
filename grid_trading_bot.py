@@ -59,9 +59,18 @@ class GridTradingBot(TradingBot):
     
     def _round_quantity(self, quantity: Decimal) -> Decimal:
         """将数量舍入到合适的精度"""
-        # 大多数交易所的最小数量精度为4位小数
-        # 可以根据具体交易所调整
-        return quantity.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
+        # 根据不同交易所使用不同的数量精度
+        if self.config.exchange.lower() == 'grvt':
+            # GRVT要求较粗的精度，使用2位小数，最小0.01
+            rounded = quantity.quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+            # 确保至少为0.01
+            return max(rounded, Decimal('0.01'))
+        elif self.config.exchange.lower() in ['edgex', 'backpack']:
+            # EdgeX和Backpack使用4位小数
+            return quantity.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
+        else:
+            # 其他交易所默认使用4位小数
+            return quantity.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
     
     def _calculate_grid_levels(self) -> List[GridLevel]:
         """计算所有网格级别"""
