@@ -55,6 +55,7 @@ python grid_bot.py --exchange grvt --ticker ETH --grid-spacing 1.0 --grid-upper 
 | `test_grid_strategy.py` | 组件测试验证脚本 |
 | `docs/GRID_STRATEGY.md` | 详细使用文档 |
 | `DYNAMIC_GRID_GUIDE.md` | 🆕 动态网格移动功能指南 |
+| `BUGFIX_DIVISION_BY_ZERO.md` | 🔧 除零错误修复报告 |
 
 ## ⚙️ 核心参数
 
@@ -92,6 +93,7 @@ python grid_bot.py --exchange grvt --ticker ETH --grid-spacing 1.0 --grid-upper 
 2. **需要充足资金**：确保资金能覆盖所有网格订单
 3. **定期监控**：关注网格成交情况和市场趋势
 4. **从小额开始**：先用小资金测试策略效果
+5. **⚠️ 参数安全**: 确保 `网格间距% × 下方网格数 < 90%` 避免负价格错误
 
 ## 🧪 测试验证
 

@@ -5,6 +5,7 @@ Grid Trading Bot - Classic Grid Strategy Implementation
 
 import asyncio
 import time
+import decimal
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
@@ -59,6 +60,26 @@ class GridTradingBot(TradingBot):
             
         if self.config.grid_per_order_amount <= 0:
             raise ValueError("Grid per order amount must be positive")
+        
+        # 验证网格参数是否会导致价格为0或负数
+        spacing_decimal = self.config.grid_spacing / 100
+        max_lower_reduction = spacing_decimal * self.config.grid_lower_count
+        
+        if max_lower_reduction >= 1.0:
+            raise ValueError(
+                f"Grid configuration will cause negative prices: "
+                f"spacing({self.config.grid_spacing}%) × lower_count({self.config.grid_lower_count}) "
+                f"= {max_lower_reduction*100:.1f}% >= 100%. "
+                f"Reduce grid spacing or lower grid count."
+            )
+        
+        # 警告当价格降幅过大时
+        if max_lower_reduction >= 0.8:
+            self.logger.log(
+                f"WARNING: Lower grids will reduce price by {max_lower_reduction*100:.1f}%. "
+                f"Consider reducing grid spacing or count to avoid very low prices.",
+                "WARNING"
+            )
             
         self.logger.log("Grid configuration validated successfully", "INFO")
     
@@ -99,9 +120,25 @@ class GridTradingBot(TradingBot):
             price = self.center_price * (1 - spacing_decimal * i)
             price = self.exchange_client.round_to_tick(price)
             
+            # 价格安全检查
+            if price <= 0:
+                self.logger.log(
+                    f"Invalid buy grid price {price:.8f} at level {i}. "
+                    f"Reduce grid count or spacing to avoid price <= 0",
+                    "ERROR"
+                )
+                raise ValueError(f"Buy grid price <= 0 at level {i}: {price}")
+            
             # 计算代币数量：USDT金额 / 价格
-            token_quantity = self.config.grid_per_order_amount / price
-            token_quantity = self._round_quantity(token_quantity)
+            try:
+                token_quantity = self.config.grid_per_order_amount / price
+                token_quantity = self._round_quantity(token_quantity)
+            except decimal.DivisionByZero:
+                self.logger.log(
+                    f"Division by zero error: price={price}, per_order_amount={self.config.grid_per_order_amount}",
+                    "ERROR"
+                )
+                raise ValueError(f"Cannot calculate quantity: price is {price}")
             
             grid_level = GridLevel(
                 price=price,
@@ -116,9 +153,25 @@ class GridTradingBot(TradingBot):
             price = self.center_price * (1 + spacing_decimal * i)
             price = self.exchange_client.round_to_tick(price)
             
+            # 价格安全检查
+            if price <= 0:
+                self.logger.log(
+                    f"Invalid sell grid price {price:.8f} at level {i}. "
+                    f"Price calculation error in sell grid",
+                    "ERROR"
+                )
+                raise ValueError(f"Sell grid price <= 0 at level {i}: {price}")
+            
             # 计算代币数量：USDT金额 / 价格
-            token_quantity = self.config.grid_per_order_amount / price
-            token_quantity = self._round_quantity(token_quantity)
+            try:
+                token_quantity = self.config.grid_per_order_amount / price
+                token_quantity = self._round_quantity(token_quantity)
+            except decimal.DivisionByZero:
+                self.logger.log(
+                    f"Division by zero error: price={price}, per_order_amount={self.config.grid_per_order_amount}",
+                    "ERROR"
+                )
+                raise ValueError(f"Cannot calculate quantity: price is {price}")
             
             grid_level = GridLevel(
                 price=price,
@@ -274,9 +327,24 @@ class GridTradingBot(TradingBot):
     async def _refill_grid_level(self, filled_grid: GridLevel):
         """在成交的网格级别重新下单"""
         try:
+            # 价格安全检查
+            if filled_grid.price <= 0:
+                self.logger.log(
+                    f"Invalid grid price for refill: {filled_grid.price:.8f}",
+                    "ERROR"
+                )
+                return
+            
             # 重新计算代币数量（因为价格可能已经变化）
-            token_quantity = self.config.grid_per_order_amount / filled_grid.price
-            token_quantity = self._round_quantity(token_quantity)
+            try:
+                token_quantity = self.config.grid_per_order_amount / filled_grid.price
+                token_quantity = self._round_quantity(token_quantity)
+            except decimal.DivisionByZero:
+                self.logger.log(
+                    f"Division by zero error in refill: price={filled_grid.price}",
+                    "ERROR"
+                )
+                return
             
             # 创建新的网格级别（相同价格和方向）
             new_grid = GridLevel(
