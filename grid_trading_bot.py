@@ -465,41 +465,198 @@ class GridTradingBot(TradingBot):
             self.logger.log(f"Error moving grid down: {e}", "ERROR")
     
     async def _execute_grid_move(self, new_center_price: Decimal, direction: str):
-        """执行网格移动"""
+        """执行网格移动 - 保持网格数量平衡的优化版本"""
         try:
             old_center_price = self.center_price
-            
-            # 1. 取消所有现有网格订单
-            self.logger.log("Cancelling all existing grid orders...", "INFO")
-            cancelled_count = await self._cancel_all_grid_orders()
-            
-            # 2. 更新中心价格
             self.center_price = self.exchange_client.round_to_tick(new_center_price)
             
-            # 3. 重新计算网格级别
-            self.grid_levels = self._calculate_grid_levels()
+            if direction == "UP":
+                # 网格向上移动：取消最低价买单，添加最高价卖单
+                cancelled, added = await self._move_grid_up_optimized()
+            else:
+                # 网格向下移动：取消最高价卖单，添加最低价买单  
+                cancelled, added = await self._move_grid_down_optimized()
             
-            # 4. 重新下单到所有网格级别
-            self.logger.log("Placing orders to new grid levels...", "INFO")
-            success_count = 0
-            for grid_level in self.grid_levels:
-                success = await self._place_grid_order(grid_level)
-                if success:
-                    success_count += 1
-                await asyncio.sleep(0.1)  # 避免订单频率限制
-            
-            # 5. 记录移动结果
+            # 记录移动结果
             self.grid_moves_count += 1
             
             self.logger.log(
-                f"Grid moved {direction}: {old_center_price:.4f} -> {self.center_price:.4f} "
-                f"| Cancelled: {cancelled_count} | Placed: {success_count}/{len(self.grid_levels)} "
-                f"| Total moves: {self.grid_moves_count}",
+                f"🔄 Grid moved {direction}: {old_center_price:.4f} -> {self.center_price:.4f} "
+                f"| Cancelled: {cancelled} | Added: {added} | Total moves: {self.grid_moves_count}",
                 "INFO"
             )
             
         except Exception as e:
             self.logger.log(f"Error executing grid move: {e}", "ERROR")
+    
+    async def _move_grid_up_optimized(self) -> Tuple[int, int]:
+        """网格向上移动的优化版本：取消最低价买单，添加最高价卖单"""
+        cancelled_count = 0
+        added_count = 0
+        
+        try:
+            # 1. 找到最低价格的买单（最远离新中心价格）
+            buy_orders = [(order_id, grid_level) for order_id, grid_level in self.active_grid_orders.items() 
+                         if grid_level.side == 'buy']
+            
+            if not buy_orders:
+                self.logger.log("No buy orders found for grid move up", "WARNING")
+                return cancelled_count, added_count
+            
+            # 按价格排序，找到最低价的买单
+            lowest_buy = min(buy_orders, key=lambda x: x[1].price)
+            order_id_to_cancel, grid_to_cancel = lowest_buy
+            
+            # 2. 取消最低价买单
+            try:
+                cancel_result = await self.exchange_client.cancel_order(order_id_to_cancel)
+                if cancel_result.success:
+                    cancelled_count += 1
+                    del self.active_grid_orders[order_id_to_cancel]
+                    self.logger.log(
+                        f"Cancelled lowest buy order: {grid_to_cancel.price:.4f} [Level {grid_to_cancel.level_index}]", 
+                        "INFO"
+                    )
+                else:
+                    self.logger.log(f"Failed to cancel buy order at {grid_to_cancel.price:.4f}", "WARNING")
+            except Exception as e:
+                self.logger.log(f"Error cancelling lowest buy order: {e}", "ERROR")
+            
+            # 3. 计算并添加新的最高价卖单
+            spacing_decimal = self.config.grid_spacing / 100
+            
+            # 找到当前最高价卖单
+            sell_orders = [(order_id, grid_level) for order_id, grid_level in self.active_grid_orders.items() 
+                          if grid_level.side == 'sell']
+            
+            if sell_orders:
+                highest_sell_price = max(sell_orders, key=lambda x: x[1].price)[1].price
+                new_sell_price = highest_sell_price * (1 + spacing_decimal)
+            else:
+                # 如果没有卖单，从中心价格开始
+                new_sell_price = self.center_price * (1 + spacing_decimal)
+            
+            new_sell_price = self.exchange_client.round_to_tick(new_sell_price)
+            
+            # 计算卖单数量
+            try:
+                sell_quantity = self.config.grid_per_order_amount / new_sell_price
+                sell_quantity = self._round_quantity(sell_quantity)
+            except:
+                self.logger.log(f"Error calculating sell quantity for price {new_sell_price}", "ERROR")
+                return cancelled_count, added_count
+            
+            # 创建新的卖单网格级别
+            new_sell_level = GridLevel(
+                price=new_sell_price,
+                side='sell',
+                quantity=sell_quantity,
+                level_index=self.config.grid_upper_count + 1  # 新的最高级别
+            )
+            
+            # 4. 下新的卖单
+            success = await self._place_grid_order(new_sell_level)
+            if success:
+                added_count += 1
+                self.logger.log(
+                    f"Added new highest sell order: {new_sell_price:.4f} [Level {new_sell_level.level_index}]",
+                    "INFO"
+                )
+            else:
+                self.logger.log(f"Failed to add new sell order at {new_sell_price:.4f}", "WARNING")
+            
+            return cancelled_count, added_count
+            
+        except Exception as e:
+            self.logger.log(f"Error in optimized grid move up: {e}", "ERROR")
+            return cancelled_count, added_count
+    
+    async def _move_grid_down_optimized(self) -> Tuple[int, int]:
+        """网格向下移动的优化版本：取消最高价卖单，添加最低价买单"""
+        cancelled_count = 0
+        added_count = 0
+        
+        try:
+            # 1. 找到最高价格的卖单（最远离新中心价格）
+            sell_orders = [(order_id, grid_level) for order_id, grid_level in self.active_grid_orders.items() 
+                          if grid_level.side == 'sell']
+            
+            if not sell_orders:
+                self.logger.log("No sell orders found for grid move down", "WARNING")
+                return cancelled_count, added_count
+            
+            # 按价格排序，找到最高价的卖单
+            highest_sell = max(sell_orders, key=lambda x: x[1].price)
+            order_id_to_cancel, grid_to_cancel = highest_sell
+            
+            # 2. 取消最高价卖单
+            try:
+                cancel_result = await self.exchange_client.cancel_order(order_id_to_cancel)
+                if cancel_result.success:
+                    cancelled_count += 1
+                    del self.active_grid_orders[order_id_to_cancel]
+                    self.logger.log(
+                        f"Cancelled highest sell order: {grid_to_cancel.price:.4f} [Level {grid_to_cancel.level_index}]", 
+                        "INFO"
+                    )
+                else:
+                    self.logger.log(f"Failed to cancel sell order at {grid_to_cancel.price:.4f}", "WARNING")
+            except Exception as e:
+                self.logger.log(f"Error cancelling highest sell order: {e}", "ERROR")
+            
+            # 3. 计算并添加新的最低价买单
+            spacing_decimal = self.config.grid_spacing / 100
+            
+            # 找到当前最低价买单
+            buy_orders = [(order_id, grid_level) for order_id, grid_level in self.active_grid_orders.items() 
+                         if grid_level.side == 'buy']
+            
+            if buy_orders:
+                lowest_buy_price = min(buy_orders, key=lambda x: x[1].price)[1].price
+                new_buy_price = lowest_buy_price * (1 - spacing_decimal)
+            else:
+                # 如果没有买单，从中心价格开始
+                new_buy_price = self.center_price * (1 - spacing_decimal)
+            
+            new_buy_price = self.exchange_client.round_to_tick(new_buy_price)
+            
+            # 价格安全检查
+            if new_buy_price <= 0:
+                self.logger.log(f"Invalid new buy price: {new_buy_price:.8f}", "ERROR")
+                return cancelled_count, added_count
+            
+            # 计算买单数量
+            try:
+                buy_quantity = self.config.grid_per_order_amount / new_buy_price
+                buy_quantity = self._round_quantity(buy_quantity)
+            except:
+                self.logger.log(f"Error calculating buy quantity for price {new_buy_price}", "ERROR")
+                return cancelled_count, added_count
+            
+            # 创建新的买单网格级别
+            new_buy_level = GridLevel(
+                price=new_buy_price,
+                side='buy',
+                quantity=buy_quantity,
+                level_index=-(self.config.grid_lower_count + 1)  # 新的最低级别
+            )
+            
+            # 4. 下新的买单
+            success = await self._place_grid_order(new_buy_level)
+            if success:
+                added_count += 1
+                self.logger.log(
+                    f"Added new lowest buy order: {new_buy_price:.4f} [Level {new_buy_level.level_index}]",
+                    "INFO"
+                )
+            else:
+                self.logger.log(f"Failed to add new buy order at {new_buy_price:.4f}", "WARNING")
+            
+            return cancelled_count, added_count
+            
+        except Exception as e:
+            self.logger.log(f"Error in optimized grid move down: {e}", "ERROR")
+            return cancelled_count, added_count
     
     async def _cancel_all_grid_orders(self) -> int:
         """取消所有网格订单"""
