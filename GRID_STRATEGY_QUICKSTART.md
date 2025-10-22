@@ -57,6 +57,8 @@ python grid_bot.py --exchange grvt --ticker ETH --grid-spacing 1.0 --grid-upper 
 | `DYNAMIC_GRID_GUIDE.md` | 🆕 动态网格移动功能指南 |
 | `BUGFIX_DIVISION_BY_ZERO.md` | 🔧 除零错误修复报告 |
 | `BUGFIX_GRID_CORE_LOGIC.md` | 🔧 网格策略核心逻辑修复报告 |
+| `CORRECTED_GRID_STRATEGY.md` | ✅ 网格策略逻辑修正报告（最新）|
+| `GRVT_GRID_OPTIMIZATION.md` | 🎯 GRVT交易所网格策略优化指南 |
 
 ## ⚙️ 核心参数
 
