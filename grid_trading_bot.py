@@ -300,29 +300,27 @@ class GridTradingBot(TradingBot):
             "INFO"
         )
         
-        # 计算利润（每个网格成交都有利润）
-        # 网格策略的利润来自于价差 = 网格间距 * 订单金额
-        if filled_grid.side == 'sell':
-            # 卖出订单成交，利润 = 网格间距 * USDT金额
-            profit = (self.config.grid_spacing / 100) * self.config.grid_per_order_amount
-        else:
-            # 买入订单成交，也有利润（为下次卖出做准备）
-            profit = (self.config.grid_spacing / 100) * self.config.grid_per_order_amount
-        
-        self.total_profit += profit
-        self.grid_trades_count += 1
-        
-        self.logger.log(
-            f"Grid trade profit: {profit:.4f} USDT (Total: {self.total_profit:.4f} USDT, "
-            f"Trades: {self.grid_trades_count})",
-            "INFO"
-        )
-        
         # 移除已成交的订单
         del self.active_grid_orders[filled_order_id]
         
-        # 在相同级别重新下单
-        await self._refill_grid_level(filled_grid)
+        # 判断是获利订单还是初始网格订单
+        is_profit_order = abs(filled_grid.level_index) >= 1000
+        
+        if is_profit_order:
+            # 获利订单成交 → 计算实际利润
+            await self._handle_profit_order_fill(filled_grid, filled_price, filled_size)
+        else:
+            # 初始网格订单成交 → 下获利订单
+            if filled_grid.side == 'buy':
+                # 买单成交 → 在更高价格下卖单
+                await self._place_profit_order_after_buy(filled_grid, filled_price, filled_size)
+            else:
+                # 卖单成交 → 在更低价格下买单  
+                await self._place_profit_order_after_sell(filled_grid, filled_price, filled_size)
+        
+        # 只有初始网格订单需要补充，获利订单不需要补充
+        if not is_profit_order:
+            await self._refill_grid_level(filled_grid)
     
     async def _refill_grid_level(self, filled_grid: GridLevel):
         """在成交的网格级别重新下单"""
@@ -371,6 +369,144 @@ class GridTradingBot(TradingBot):
                 
         except Exception as e:
             self.logger.log(f"Error refilling grid level: {e}", "ERROR")
+    
+    async def _place_profit_order_after_buy(self, filled_grid: GridLevel, filled_price: Decimal, filled_size: Decimal):
+        """买单成交后，在更高价格下卖单获利"""
+        try:
+            # 计算获利卖出价格：买入价格 + 网格间距
+            spacing_decimal = self.config.grid_spacing / 100
+            profit_price = filled_price * (1 + spacing_decimal)
+            profit_price = self.exchange_client.round_to_tick(profit_price)
+            
+            # 价格安全检查
+            if profit_price <= filled_price:
+                self.logger.log(
+                    f"Invalid profit price {profit_price:.4f} <= fill price {filled_price:.4f}",
+                    "ERROR"
+                )
+                return
+            
+            # 创建获利卖单
+            profit_grid = GridLevel(
+                price=profit_price,
+                side='sell',
+                quantity=filled_size,  # 使用实际成交数量
+                level_index=filled_grid.level_index + 1000  # 特殊标记为获利订单
+            )
+            
+            # 下获利订单
+            success = await self._place_grid_order(profit_grid)
+            
+            if success:
+                # 计算预期利润
+                expected_profit = (profit_price - filled_price) * filled_size
+                self.logger.log(
+                    f"✅ Profit order placed: SELL {filled_size} @ {profit_price:.4f} "
+                    f"(Expected profit: {expected_profit:.4f} USDT) "
+                    f"[After BUY @ {filled_price:.4f}]",
+                    "INFO"
+                )
+            else:
+                self.logger.log(
+                    f"❌ Failed to place profit sell order @ {profit_price:.4f}",
+                    "WARNING"
+                )
+                
+        except Exception as e:
+            self.logger.log(f"Error placing profit order after buy: {e}", "ERROR")
+    
+    async def _place_profit_order_after_sell(self, filled_grid: GridLevel, filled_price: Decimal, filled_size: Decimal):
+        """卖单成交后，在更低价格下买单获利"""
+        try:
+            # 计算获利买入价格：卖出价格 - 网格间距
+            spacing_decimal = self.config.grid_spacing / 100
+            profit_price = filled_price * (1 - spacing_decimal)
+            profit_price = self.exchange_client.round_to_tick(profit_price)
+            
+            # 价格安全检查
+            if profit_price >= filled_price or profit_price <= 0:
+                self.logger.log(
+                    f"Invalid profit price {profit_price:.4f} (fill price: {filled_price:.4f})",
+                    "ERROR"
+                )
+                return
+            
+            # 计算买入数量：USDT金额 / 买入价格
+            try:
+                buy_quantity = self.config.grid_per_order_amount / profit_price
+                buy_quantity = self._round_quantity(buy_quantity)
+            except decimal.DivisionByZero:
+                self.logger.log(f"Division by zero in profit order: price={profit_price}", "ERROR")
+                return
+            
+            # 创建获利买单
+            profit_grid = GridLevel(
+                price=profit_price,
+                side='buy', 
+                quantity=buy_quantity,
+                level_index=filled_grid.level_index - 1000  # 特殊标记为获利订单
+            )
+            
+            # 下获利订单
+            success = await self._place_grid_order(profit_grid)
+            
+            if success:
+                # 计算预期利润（基于USDT金额）
+                expected_profit = (filled_price - profit_price) * buy_quantity
+                self.logger.log(
+                    f"✅ Profit order placed: BUY {buy_quantity} @ {profit_price:.4f} "
+                    f"(Expected profit: {expected_profit:.4f} USDT) "
+                    f"[After SELL @ {filled_price:.4f}]",
+                    "INFO"
+                )
+            else:
+                self.logger.log(
+                    f"❌ Failed to place profit buy order @ {profit_price:.4f}",
+                    "WARNING"
+                )
+                
+        except Exception as e:
+            self.logger.log(f"Error placing profit order after sell: {e}", "ERROR")
+    
+    async def _handle_profit_order_fill(self, filled_grid: GridLevel, filled_price: Decimal, filled_size: Decimal):
+        """处理获利订单成交，计算实际利润"""
+        try:
+            # 计算实际利润
+            spacing_decimal = self.config.grid_spacing / 100
+            
+            if filled_grid.side == 'sell':
+                # 获利卖单成交 - 计算与对应买单的价差
+                original_buy_price = filled_price / (1 + spacing_decimal)
+                actual_profit = (filled_price - original_buy_price) * filled_size
+                
+                self.logger.log(
+                    f"💰 PROFIT REALIZED: SELL {filled_size} @ {filled_price:.4f} "
+                    f"(Buy was ~{original_buy_price:.4f}) → Profit: {actual_profit:.4f} USDT",
+                    "INFO"
+                )
+            else:
+                # 获利买单成交 - 计算与对应卖单的价差
+                original_sell_price = filled_price / (1 - spacing_decimal)
+                actual_profit = (original_sell_price - filled_price) * filled_size
+                
+                self.logger.log(
+                    f"💰 PROFIT REALIZED: BUY {filled_size} @ {filled_price:.4f} "
+                    f"(Sell was ~{original_sell_price:.4f}) → Profit: {actual_profit:.4f} USDT",
+                    "INFO"
+                )
+            
+            # 更新总利润和交易计数
+            self.total_profit += actual_profit
+            self.grid_trades_count += 1
+            
+            self.logger.log(
+                f"📊 Grid Statistics: Total Profit: {self.total_profit:.4f} USDT, "
+                f"Completed Trades: {self.grid_trades_count}",
+                "INFO"
+            )
+            
+        except Exception as e:
+            self.logger.log(f"Error handling profit order fill: {e}", "ERROR")
     
     async def _check_price_breakthrough(self) -> bool:
         """检测价格是否突破网格边界"""
