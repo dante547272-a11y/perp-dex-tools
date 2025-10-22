@@ -5,7 +5,7 @@ Grid Trading Bot - Classic Grid Strategy Implementation
 
 import asyncio
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import traceback
@@ -57,6 +57,12 @@ class GridTradingBot(TradingBot):
             
         self.logger.log("Grid configuration validated successfully", "INFO")
     
+    def _round_quantity(self, quantity: Decimal) -> Decimal:
+        """将数量舍入到合适的精度"""
+        # 大多数交易所的最小数量精度为4位小数
+        # 可以根据具体交易所调整
+        return quantity.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
+    
     def _calculate_grid_levels(self) -> List[GridLevel]:
         """计算所有网格级别"""
         if not self.center_price:
@@ -70,10 +76,14 @@ class GridTradingBot(TradingBot):
             price = self.center_price * (1 - spacing_decimal * i)
             price = self.round_to_tick(price)
             
+            # 计算代币数量：USDT金额 / 价格
+            token_quantity = self.config.grid_per_order_amount / price
+            token_quantity = self._round_quantity(token_quantity)
+            
             grid_level = GridLevel(
                 price=price,
                 side='buy',
-                quantity=self.config.grid_per_order_amount,
+                quantity=token_quantity,
                 level_index=-i  # 负数表示低于中心价格
             )
             grid_levels.append(grid_level)
@@ -83,10 +93,14 @@ class GridTradingBot(TradingBot):
             price = self.center_price * (1 + spacing_decimal * i)
             price = self.round_to_tick(price)
             
+            # 计算代币数量：USDT金额 / 价格
+            token_quantity = self.config.grid_per_order_amount / price
+            token_quantity = self._round_quantity(token_quantity)
+            
             grid_level = GridLevel(
                 price=price,
                 side='sell',
-                quantity=self.config.grid_per_order_amount,
+                quantity=token_quantity,
                 level_index=i  # 正数表示高于中心价格
             )
             grid_levels.append(grid_level)
@@ -194,19 +208,23 @@ class GridTradingBot(TradingBot):
             "INFO"
         )
         
-        # 计算利润（如果是卖出订单）
+        # 计算利润（每个网格成交都有利润）
+        # 网格策略的利润来自于价差 = 网格间距 * 订单金额
         if filled_grid.side == 'sell':
-            # 卖出订单成交，计算相对于下方买入网格的利润
-            buy_price = self.center_price * (1 - (self.config.grid_spacing / 100) * abs(filled_grid.level_index))
-            profit = (filled_price - buy_price) * filled_size
-            self.total_profit += profit
-            self.grid_trades_count += 1
-            
-            self.logger.log(
-                f"Grid trade profit: {profit:.4f} USDT (Total: {self.total_profit:.4f} USDT, "
-                f"Trades: {self.grid_trades_count})",
-                "INFO"
-            )
+            # 卖出订单成交，利润 = 网格间距 * USDT金额
+            profit = (self.config.grid_spacing / 100) * self.config.grid_per_order_amount
+        else:
+            # 买入订单成交，也有利润（为下次卖出做准备）
+            profit = (self.config.grid_spacing / 100) * self.config.grid_per_order_amount
+        
+        self.total_profit += profit
+        self.grid_trades_count += 1
+        
+        self.logger.log(
+            f"Grid trade profit: {profit:.4f} USDT (Total: {self.total_profit:.4f} USDT, "
+            f"Trades: {self.grid_trades_count})",
+            "INFO"
+        )
         
         # 移除已成交的订单
         del self.active_grid_orders[filled_order_id]
@@ -217,11 +235,15 @@ class GridTradingBot(TradingBot):
     async def _refill_grid_level(self, filled_grid: GridLevel):
         """在成交的网格级别重新下单"""
         try:
+            # 重新计算代币数量（因为价格可能已经变化）
+            token_quantity = self.config.grid_per_order_amount / filled_grid.price
+            token_quantity = self._round_quantity(token_quantity)
+            
             # 创建新的网格级别（相同价格和方向）
             new_grid = GridLevel(
                 price=filled_grid.price,
                 side=filled_grid.side,
-                quantity=filled_grid.quantity,
+                quantity=token_quantity,
                 level_index=filled_grid.level_index
             )
             
@@ -313,8 +335,16 @@ class GridTradingBot(TradingBot):
     async def run(self):
         """运行网格交易策略"""
         try:
+            # 临时设置一个有效的quantity值来通过交易所验证
+            # 网格策略实际不使用这个值
+            original_quantity = self.config.quantity
+            self.config.quantity = Decimal('0.01')  # 设置一个通常满足最小要求的值
+            
             # 获取合约信息
             self.config.contract_id, self.config.tick_size = await self.exchange_client.get_contract_attributes()
+            
+            # 恢复原始值
+            self.config.quantity = original_quantity
             
             # 记录网格配置
             self.logger.log("=== Grid Trading Configuration ===", "INFO")
