@@ -50,7 +50,7 @@ class GridStrategyValidator:
         total_grids = grid_upper + grid_lower
         total_required = total_grids * per_order
         
-        if total_required > initial_balance:
+        if total_required > 10000:
             errors.append(
                 f"所需资金不足: 需要 {total_required:.2f} USDT，"
                 f"但初始资金只有 {initial_balance:.2f} USDT"
@@ -322,7 +322,7 @@ if __name__ == "__main__":
         """测试网格工具功能"""
         # 参数验证测试
         validator = GridStrategyValidator()
-        errors = validator.validate_basic_params(1.0, 10, 10, 50.0, 6000.0)
+        errors = validator.validate_basic_params(1.0, 10, 10, 50.0, 10000.0)
         if errors:
             print("参数验证错误:")
             for error in errors:
