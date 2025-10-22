@@ -59,12 +59,21 @@ class GridTradingBot(TradingBot):
     
     def _round_quantity(self, quantity: Decimal) -> Decimal:
         """将数量舍入到合适的精度"""
-        # 根据不同交易所使用不同的数量精度
+        # 根据不同交易所和代币使用不同的数量精度
         if self.config.exchange.lower() == 'grvt':
-            # GRVT要求较粗的精度，使用2位小数，最小0.01
-            rounded = quantity.quantize(Decimal('0.01'), rounding=ROUND_DOWN)
-            # 确保至少为0.01
-            return max(rounded, Decimal('0.01'))
+            # GRVT根据代币类型使用不同精度
+            if self.config.ticker.upper() in ['HYPE', 'DOGE', 'ADA', 'XRP']:
+                # 低价代币使用整数精度，最小1.0
+                rounded = quantity.quantize(Decimal('1'), rounding=ROUND_DOWN)
+                return max(rounded, Decimal('1'))
+            elif self.config.ticker.upper() in ['SOL', 'AVAX', 'NEAR']:
+                # 中价代币使用1位小数，最小0.1
+                rounded = quantity.quantize(Decimal('0.1'), rounding=ROUND_DOWN)
+                return max(rounded, Decimal('0.1'))
+            else:
+                # 高价代币（BTC, ETH等）使用2位小数，最小0.01
+                rounded = quantity.quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+                return max(rounded, Decimal('0.01'))
         elif self.config.exchange.lower() in ['edgex', 'backpack']:
             # EdgeX和Backpack使用4位小数
             return quantity.quantize(Decimal('0.0001'), rounding=ROUND_DOWN)
@@ -347,7 +356,17 @@ class GridTradingBot(TradingBot):
             # 临时设置一个有效的quantity值来通过交易所验证
             # 网格策略实际不使用这个值
             original_quantity = self.config.quantity
-            self.config.quantity = Decimal('0.01')  # 设置一个通常满足最小要求的值
+            
+            # 根据不同代币设置合适的临时数量
+            if self.config.ticker.upper() in ['HYPE', 'DOGE', 'ADA', 'XRP']:
+                # 低价代币通常需要更大的最小数量
+                self.config.quantity = Decimal('1.0')
+            elif self.config.ticker.upper() in ['SOL', 'AVAX', 'NEAR']:
+                # 中价代币
+                self.config.quantity = Decimal('0.1')
+            else:
+                # 高价代币（BTC, ETH等）
+                self.config.quantity = Decimal('0.01')
             
             # 获取合约信息
             self.config.contract_id, self.config.tick_size = await self.exchange_client.get_contract_attributes()
